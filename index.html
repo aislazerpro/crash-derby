@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>CRASH ДЕРБИ — 3D гонки с разрушениями</title>
+<style>
+:root{--acc:#ffcf33;--red:#ff4d3d;--bg:#0d1016}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;user-select:none;-webkit-user-select:none;touch-action:none}
+canvas{display:block}
+#hud{position:fixed;inset:0;pointer-events:none}
+.tl{position:absolute;left:16px;top:14px;font-weight:800;text-shadow:0 2px 6px #000a}
+.tl .sc{font-size:30px;color:var(--acc)}.tl .ds{font-size:15px;opacity:.85}
+.tr{position:absolute;right:16px;top:12px;text-align:right;font-weight:900;text-shadow:0 2px 6px #000a}
+.tr .sp{font-size:42px;line-height:1}.tr .u{font-size:14px;opacity:.8}
+.bars{position:absolute;left:16px;bottom:16px;width:min(260px,45vw)}
+.bar{height:12px;border-radius:8px;background:#0008;border:1px solid #fff3;margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;width:100%;border-radius:8px}
+#hp i{background:linear-gradient(90deg,#ff3b30,#ffcc00,#34c759)}#nt i{background:linear-gradient(90deg,#3aa0ff,#9be7ff)}
+.lbl{font-size:11px;font-weight:800;letter-spacing:1px;opacity:.85;margin-top:6px}
+#float{position:absolute;left:50%;top:30%;transform:translateX(-50%);font-size:34px;font-weight:900;color:var(--acc);text-shadow:0 3px 10px #000;opacity:0;transition:opacity .2s}
+.screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:radial-gradient(ellipse at center,#1b2230dd,#07090dee);text-align:center;padding:20px;z-index:5}
+.screen h1{font-size:clamp(40px,9vw,84px);font-weight:900;letter-spacing:2px;color:var(--acc);text-shadow:4px 4px 0 var(--red)}
+.screen p{opacity:.9;max-width:520px;line-height:1.5}
+.btn{pointer-events:auto;border:0;border-radius:14px;padding:16px 34px;font-size:20px;font-weight:900;background:var(--acc);color:#111;cursor:pointer;box-shadow:0 6px 0 #b8901a}
+.btn:active{transform:translateY(3px);box-shadow:0 3px 0 #b8901a}
+.keys{font-size:14px;opacity:.75}
+.hidden{display:none!important}
+#touch{position:fixed;inset:auto 0 0 0;height:150px;display:none;justify-content:space-between;align-items:flex-end;padding:0 14px 18px;z-index:4;pointer-events:none}
+#touch .grp{display:flex;gap:12px;pointer-events:auto}
+#touch button{width:78px;height:78px;border-radius:50%;border:2px solid #fff6;background:#0007;color:#fff;font-size:30px;font-weight:900}
+#touch button.on{background:#ffcf33aa;color:#111}
+#mute{position:fixed;right:16px;top:72px;z-index:6;pointer-events:auto;background:#0007;border:1px solid #fff4;color:#fff;border-radius:10px;padding:6px 10px;font-size:16px}
+@media (pointer:coarse){#touch{display:flex}.bars{bottom:170px}}
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="tl"><div class="sc" id="score">0</div><div class="ds" id="dist">0 м</div></div>
+  <div class="tr"><div class="sp" id="spd">0</div><div class="u">км/ч</div></div>
+  <div class="bars"><div class="lbl">КОРПУС</div><div class="bar" id="hp"><i></i></div><div class="lbl">НИТРО</div><div class="bar" id="nt"><i></i></div></div>
+  <div id="float"></div>
+</div>
+<button id="mute">🔊</button>
+<div id="touch"><div class="grp"><button id="bL">◀</button><button id="bR">▶</button></div><div class="grp"><button id="bB">■</button><button id="bN">🔥</button></div></div>
+<div class="screen" id="start">
+  <h1>CRASH ДЕРБИ</h1>
+  <p>Гони по трассе, тарань машины и разноси их на запчасти. Чем жёстче авария — тем больше очков. Береги корпус: от сильного удара твоя машина развалится, а манекен-водитель вылетит через лобовое.</p>
+  <button class="btn" id="go">СТАРТ</button>
+  <div class="keys">← → руль · ↓ тормоз · Пробел / Shift — нитро · на телефоне — кнопки внизу</div>
+</div>
+<div class="screen hidden" id="over">
+  <h1>АВАРИЯ!</h1>
+  <p id="res"></p>
+  <button class="btn" id="again">ЕЩЁ РАЗ</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const rnd = (a, b) => a + Math.random() * (b - a);
+const LANES = [-9, -3, 3, 9], ROAD_HALF = 11.2;
+
+// ---------- сцена ----------
+const renderer = new THREE.WebGLRenderer({antialias: true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf2a35e);
+scene.fog = new THREE.Fog(0xf2a35e, 80, 330);
+const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 600);
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+scene.add(new THREE.HemisphereLight(0xffe6c4, 0x3a2a20, 0.75));
+const sun = new THREE.DirectionalLight(0xffd8a8, 1.0);
+sun.position.set(-30, 50, 20); sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, {left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 140});
+scene.add(sun, sun.target);
+
+// дорога с текстурой разметки
+const rc = document.createElement('canvas'); rc.width = 256; rc.height = 256;
+const rx = rc.getContext('2d');
+rx.fillStyle = '#3b3d42'; rx.fillRect(0, 0, 256, 256);
+for (let i = 0; i < 1600; i++) { rx.fillStyle = `rgba(255,255,255,${Math.random() * .05})`; rx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2); }
+rx.fillStyle = '#f5f5f5'; rx.fillRect(4, 0, 6, 256); rx.fillRect(246, 0, 6, 256);
+rx.fillStyle = '#ffd23d'; rx.fillRect(125, 0, 6, 256);
+rx.fillStyle = '#f5f5f5'; [64, 192].forEach(x => rx.fillRect(x - 3, 0, 6, 120));
+const roadTex = new THREE.CanvasTexture(rc);
+roadTex.wrapS = roadTex.wrapT = THREE.RepeatWrapping; roadTex.repeat.set(1, 40); roadTex.anisotropy = 4;
+const road = new THREE.Mesh(new THREE.PlaneGeometry(24, 640), new THREE.MeshStandardMaterial({map: roadTex, roughness: .9}));
+road.rotation.x = -Math.PI / 2; road.receiveShadow = true; scene.add(road);
+const grass = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), new THREE.MeshStandardMaterial({color: 0x7f9a4a, roughness: 1}));
+grass.rotation.x = -Math.PI / 2; grass.position.y = -0.02; grass.receiveShadow = true; scene.add(grass);
+const railMat = new THREE.MeshStandardMaterial({color: 0xb9c0c8, metalness: .6, roughness: .4});
+const rails = [-1, 1].map(s => { const m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.45, 640), railMat); m.position.set(s * 12.2, 0.75, 0); m.castShadow = true; scene.add(m); return m; });
+const postGeo = new THREE.BoxGeometry(0.18, 0.9, 0.18), posts = [];
+for (let i = 0; i < 80; i++) { const p = new THREE.Mesh(postGeo, railMat); p.position.set((i % 2 ? 1 : -1) * 12.2, 0.45, -Math.floor(i / 2) * 8); scene.add(p); posts.push(p); }
+const treeGeo = new THREE.ConeGeometry(2.2, 7, 7), trunkGeo = new THREE.CylinderGeometry(.3, .4, 2, 6);
+const treeMat = new THREE.MeshStandardMaterial({color: 0x3f6b35, flatShading: true}), trunkMat = new THREE.MeshStandardMaterial({color: 0x6b4a2f});
+const trees = [];
+for (let i = 0; i < 70; i++) {
+  const t = new THREE.Group(); const c = new THREE.Mesh(treeGeo, treeMat); c.position.y = 5; c.castShadow = true; t.add(c);
+  const tr = new THREE.Mesh(trunkGeo, trunkMat); tr.position.y = 1; t.add(tr);
+  t.position.set((i % 2 ? 1 : -1) * rnd(17, 60), 0, -rnd(0, 330)); t.scale.setScalar(rnd(.7, 1.4)); scene.add(t); trees.push(t);
+}
+
+// ---------- машины ----------
+const G = {
+  body: new THREE.BoxGeometry(2.0, 0.6, 4.2), cabin: new THREE.BoxGeometry(1.76, 0.56, 2.0), roof: new THREE.BoxGeometry(1.8, 0.08, 2.04),
+  hood: new THREE.BoxGeometry(1.92, 0.07, 1.25), trunk: new THREE.BoxGeometry(1.92, 0.07, 0.8), door: new THREE.BoxGeometry(0.07, 0.5, 1.5),
+  bumper: new THREE.BoxGeometry(2.08, 0.26, 0.22), wheel: new THREE.CylinderGeometry(0.4, 0.4, 0.32, 14), light: new THREE.BoxGeometry(0.42, 0.14, 0.06),
+  head: new THREE.SphereGeometry(0.21, 14, 10), torso: new THREE.BoxGeometry(0.5, 0.6, 0.3), limb: new THREE.BoxGeometry(0.14, 0.5, 0.14), leg: new THREE.BoxGeometry(0.17, 0.62, 0.17)
+};
+G.wheel.rotateZ(Math.PI / 2);
+const M = {
+  glass: new THREE.MeshStandardMaterial({color: 0x9fd3ff, transparent: true, opacity: .35, metalness: .9, roughness: .05}),
+  dark: new THREE.MeshStandardMaterial({color: 0x1d1f24, roughness: .7}), tire: new THREE.MeshStandardMaterial({color: 0x111111, roughness: .9}),
+  head: new THREE.MeshStandardMaterial({color: 0xfff1a6, emissive: 0xfff1a6, emissiveIntensity: .8}), tail: new THREE.MeshStandardMaterial({color: 0xff2a2a, emissive: 0xff2a2a, emissiveIntensity: .7}),
+  dummy: new THREE.MeshStandardMaterial({color: 0xffc928, roughness: .5}), dummyDark: new THREE.MeshStandardMaterial({color: 0x222222, roughness: .5})
+};
+const COLORS = [0xd8302f, 0x2f7de1, 0x2fbf71, 0xf2f2f2, 0x222831, 0xf0a020, 0x8e44ad, 0x16a3a3];
+
+function makeCar(color, isPlayer) {
+  const g = new THREE.Group(), parts = [], dummy = [];
+  const mat = new THREE.MeshStandardMaterial({color, metalness: .45, roughness: .4});
+  const add = (geo, m, x, y, z, list = parts) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = true; g.add(o); if (list) list.push(o); return o; };
+  const body = add(G.body, mat, 0, 0.62, 0, null);
+  add(G.cabin, M.glass, 0, 1.2, 0.3); add(G.roof, mat, 0, 1.52, 0.3);
+  add(G.hood, mat, 0, 0.955, -1.45); add(G.trunk, mat, 0, 0.955, 1.68);
+  add(G.door, mat, -1.04, 0.72, 0.3); add(G.door, mat, 1.04, 0.72, 0.3);
+  add(G.bumper, M.dark, 0, 0.44, -2.18); add(G.bumper, M.dark, 0, 0.44, 2.18);
+  add(G.light, M.head, -0.62, 0.72, -2.11); add(G.light, M.head, 0.62, 0.72, -2.11);
+  add(G.light, M.tail, -0.62, 0.72, 2.11); add(G.light, M.tail, 0.62, 0.72, 2.11);
+  const wheels = [[-0.98, -1.35], [0.98, -1.35], [-0.98, 1.35], [0.98, 1.35]].map(([x, z]) => add(G.wheel, M.tire, x, 0.4, z));
+  if (isPlayer) {
+    add(G.torso, M.dummy, 0, 1.18, 0.55, dummy);
+    const h = add(G.head, M.dummy, 0, 1.68, 0.55, dummy);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(.05, 8, 6), M.dummyDark); eye.position.set(-.21, .05, 0); h.add(eye); const e2 = eye.clone(); e2.position.x = .21; h.add(e2);
+    const aL = add(G.limb, M.dummy, -0.33, 1.2, 0.2, dummy); aL.rotation.x = 1.1;
+    const aR = add(G.limb, M.dummy, 0.33, 1.2, 0.2, dummy); aR.rotation.x = 1.1;
+    const lL = add(G.leg, M.dummyDark, -0.14, 0.95, 0.15, dummy); lL.rotation.x = 1.45;
+    const lR = add(G.leg, M.dummyDark, 0.14, 0.95, 0.15, dummy); lR.rotation.x = 1.45;
+  }
+  g.userData = {parts, dummy, wheels, body, speed: 0, vx: 0, spin: 0, wrecked: false, hp: 100};
+  scene.add(g);
+  return g;
+}
+
+// ---------- обломки и частицы ----------
+const debris = [], fx = [];
+const tmp = new THREE.Vector3();
+function detach(mesh, vel, spinK = 1) {
+  if (!mesh.parent || mesh.parent === scene) return;
+  scene.attach(mesh);
+  debris.push({m: mesh, v: vel.clone(), w: new THREE.Vector3(rnd(-8, 8), rnd(-8, 8), rnd(-8, 8)).multiplyScalar(spinK), life: 25, h: 0.12});
+  while (debris.length > 260) { const d = debris.shift(); scene.remove(d.m); }
+}
+const sparkGeo = new THREE.BoxGeometry(.12, .12, .12), smokeGeo = new THREE.IcosahedronGeometry(.6, 0);
+function burst(p, n, kind) {
+  for (let i = 0; i < n; i++) {
+    const fire = kind === 'spark';
+    const m = new THREE.Mesh(fire ? sparkGeo : smokeGeo, new THREE.MeshBasicMaterial({color: fire ? (Math.random() < .5 ? 0xffd34d : 0xff7a1a) : 0x555555, transparent: true, opacity: fire ? 1 : .55, depthWrite: false}));
+    m.position.copy(p).add(new THREE.Vector3(rnd(-.5, .5), rnd(0, .6), rnd(-.5, .5)));
+    scene.add(m);
+    fx.push({m, v: fire ? new THREE.Vector3(rnd(-9, 9), rnd(2, 10), rnd(-9, 9)) : new THREE.Vector3(rnd(-1, 1), rnd(1.5, 3.5), rnd(-1, 1)), life: fire ? rnd(.3, .8) : rnd(1.2, 2.6), max: 0, smoke: !fire});
+    fx[fx.length - 1].max = fx[fx.length - 1].life;
+  }
+}
+
+// ---------- звук ----------
+let AC = null, eng = null, engGain = null, muted = false;
+function audioInit() {
+  if (AC) return;
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    eng = AC.createOscillator(); eng.type = 'sawtooth'; engGain = AC.createGain(); engGain.gain.value = 0;
+    const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
+    eng.connect(f); f.connect(engGain); engGain.connect(AC.destination); eng.start();
+  } catch (e) { AC = null; }
+}
+function crashSound(power) {
+  if (!AC || muted) return;
+  const len = AC.sampleRate * Math.min(1.2, .25 + power / 60), buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.5);
+  const s = AC.createBufferSource(); s.buffer = buf; const g = AC.createGain(); g.gain.value = Math.min(1, .25 + power / 50);
+  const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400; s.connect(f); f.connect(g); g.connect(AC.destination); s.start();
+}
+$('mute').onclick = () => { muted = !muted; $('mute').textContent = muted ? '🔇' : '🔊'; };
+
+// ---------- состояние игры ----------
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault(); });
+addEventListener('keyup', e => keys[e.code] = false);
+const touch = {L: false, R: false, B: false, N: false};
+[['bL', 'L'], ['bR', 'R'], ['bB', 'B'], ['bN', 'N']].forEach(([id, k]) => {
+  const b = $(id);
+  const on = e => { e.preventDefault(); touch[k] = true; b.classList.add('on'); audioInit(); };
+  const off = e => { e.preventDefault(); touch[k] = false; b.classList.remove('on'); };
+  b.addEventListener('touchstart', on, {passive: false}); b.addEventListener('touchend', off); b.addEventListener('touchcancel', off);
+  b.addEventListener('mousedown', on); b.addEventListener('mouseup', off); b.addEventListener('mouseleave', off);
+});
+
+let player, traffic = [], ramps = [], state = 'menu', score = 0, distance = 0, nitro = 100, timeScale = 1, slowT = 0, shake = 0, steerV = 0, overT = 0, startZ = 0, camFocus = null;
+let best = 0; try { best = +localStorage.getItem('crash_best') || 0; } catch (e) {}
+
+const rampGeo = new THREE.BoxGeometry(5, 0.4, 6), rampMat = new THREE.MeshStandardMaterial({color: 0xff8c1a, roughness: .6});
+function placeRamp(r, z) { r.position.set(LANES[Math.floor(Math.random() * 4)], 0.55, z); r.rotation.set(0.18, 0, 0); r.visible = true; }
+
+function spawnTraffic(car, z) {
+  for (let t = 0; t < 10; t++) {
+    const x = LANES[Math.floor(Math.random() * 4)];
+    if (!traffic.some(o => o !== car && !o.userData.wrecked && Math.abs(o.position.x - x) < 2 && Math.abs(o.position.z - z) < 16)) { car.position.set(x, 0, z); break; }
+    z -= 14;
+  }
+  car.position.y = 0; car.rotation.set(0, 0, 0);
+  Object.assign(car.userData, {speed: rnd(14, 30) + Math.min(15, distance / 900), vx: 0, spin: 0, wrecked: false, hp: 100});
+}
+function newTrafficCar(z) { const c = makeCar(COLORS[Math.floor(Math.random() * COLORS.length)], false); traffic.push(c); spawnTraffic(c, z); return c; }
+
+function reset() {
+  [...debris, ...fx].forEach(d => scene.remove(d.m)); debris.length = fx.length = 0;
+  traffic.forEach(c => scene.remove(c)); traffic = [];
+  if (player) scene.remove(player);
+  player = makeCar(0xffcf33, true);
+  Object.assign(player.userData, {speed: 18, vy: 0, hp: 100});
+  player.position.set(3, 0, 0); startZ = 0;
+  for (let i = 0; i < 12; i++) newTrafficCar(-60 - i * 28);
+  ramps.forEach(r => scene.remove(r)); ramps = [];
+  for (let i = 0; i < 3; i++) { const r = new THREE.Mesh(rampGeo, rampMat); r.castShadow = r.receiveShadow = true; scene.add(r); placeRamp(r, -220 - i * 260); ramps.push(r); }
+  score = 0; distance = 0; nitro = 100; timeScale = 1; slowT = 0; shake = 0; steerV = 0; camFocus = null;
+}
+
+function floatText(t) { const f = $('float'); f.textContent = t; f.style.opacity = 1; clearTimeout(f._t); f._t = setTimeout(() => f.style.opacity = 0, 700); }
+
+function velOf(car) { return new THREE.Vector3(car.userData.vx, 0, -car.userData.speed); }
+
+function hitCar(other, impact, side) {
+  const P = player.userData, O = other.userData;
+  const pv = velOf(player);
+  // машина соперника: толчок, вращение, отлетающие детали
+  O.speed = Math.max(O.speed, P.speed * 0.85);
+  O.vx += side * rnd(4, 9) + rnd(-2, 2);
+  O.spin += rnd(-1, 1) * impact * 0.06;
+  const nO = Math.min(O.parts.length, Math.floor(impact / 7) + 1);
+  for (let i = 0; i < nO; i++) { const p = O.parts.splice(Math.floor(Math.random() * O.parts.length), 1)[0]; detach(p, velOf(other).add(new THREE.Vector3(rnd(-6, 6), rnd(3, 6 + impact * .2), rnd(-8, 4)))); }
+  O.hp -= impact * 2.2;
+  if (O.hp <= 0 && !O.wrecked) { O.wrecked = true; O.spin += rnd(-4, 4); score += 500; floatText('ВДРЕБЕЗГИ! +500'); burst(other.position.clone().setY(1), 14, 'smoke'); }
+  burst(new THREE.Vector3((player.position.x + other.position.x) / 2, 1, (player.position.z + other.position.z) / 2), 10 + impact, 'spark');
+  // своя машина
+  P.hp -= impact * 1.15;
+  const front = ['hood', 'bumper', 'light'];
+  const nP = Math.floor(impact / 11);
+  for (let i = 0; i < nP && P.parts.length; i++) { const idx = Math.floor(Math.random() * Math.min(P.parts.length, 9)); const p = P.parts.splice(idx, 1)[0]; detach(p, pv.clone().multiplyScalar(.6).add(new THREE.Vector3(rnd(-5, 5), rnd(4, 9), rnd(-4, 4)))); }
+  P.speed *= impact > 20 ? 0.35 : 0.6;
+  P.vx -= side * impact * 0.12;
+  const pts = Math.round(impact * 12); score += pts; if (pts > 60) floatText('+' + pts);
+  shake = Math.min(1.2, .2 + impact / 40); crashSound(impact);
+  if (impact > 34 || P.hp <= 0) wreck(impact);
+}
+
+function wreck(impact) {
+  const P = player.userData;
+  if (P.wrecked) return;
+  P.wrecked = true; state = 'crash'; overT = 3.4;
+  const v = velOf(player);
+  P.parts.splice(0).forEach(p => detach(p, v.clone().multiplyScalar(rnd(.3, .8)).add(new THREE.Vector3(rnd(-7, 7), rnd(4, 12), rnd(-6, 6)))));
+  // манекен вылетает через лобовое, конечности отрываются
+  const fly = v.clone().multiplyScalar(0.95).add(new THREE.Vector3(0, 9 + impact * 0.12, 0));
+  P.dummy.splice(0).forEach((p, i) => { detach(p, fly.clone().add(new THREE.Vector3(rnd(-4, 4), rnd(-1, 4), rnd(-4, 4))), 2.2); if (i === 0) camFocus = p; });
+  burst(player.position.clone().setY(1), 30, 'spark'); burst(player.position.clone().setY(1), 20, 'smoke');
+  slowT = 1.8; timeScale = 0.25; shake = 1.4; crashSound(60);
+  score += Math.round(impact * 20);
+  floatText('БАБАХ!');
+}
+
+function gameOver() {
+  state = 'over';
+  const km = (distance / 1000).toFixed(2);
+  if (score > best) { best = score; try { localStorage.setItem('crash_best', best); } catch (e) {} }
+  $('res').innerHTML = `Очки: <b>${score}</b><br>Пройдено: ${km} км<br>Рекорд: ${best}`;
+  $('over').classList.remove('hidden');
+}
+
+// ---------- цикл ----------
+let last = performance.now();
+function loop(now) {
+  requestAnimationFrame(loop);
+  let rdt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (slowT > 0) { slowT -= rdt; if (slowT <= 0) timeScale = 1; }
+  const dt = rdt * timeScale;
+  if (player && (state === 'play' || state === 'crash')) update(dt, rdt);
+  updateEffects(dt);
+  updateCamera(rdt);
+  renderer.render(scene, camera);
+}
+
+function update(dt, rdt) {
+  const P = player.userData, pos = player.position;
+  if (state === 'play') {
+    const left = keys.ArrowLeft || keys.KeyA || touch.L, right = keys.ArrowRight || keys.KeyD || touch.R;
+    const brake = keys.ArrowDown || keys.KeyS || touch.B, boost = (keys.Space || keys.ShiftLeft || keys.ShiftRight || touch.N) && nitro > 0;
+    const target = (right ? 1 : 0) - (left ? 1 : 0);
+    steerV += (target - steerV) * Math.min(1, dt * 8);
+    const maxS = boost ? 88 : 62;
+    if (brake) P.speed = Math.max(0, P.speed - 45 * dt);
+    else P.speed += (P.speed < maxS ? (boost ? 32 : 14) : -20) * dt;
+    if (boost) { nitro = Math.max(0, nitro - 28 * dt); if (Math.random() < .5) burst(pos.clone().add(new THREE.Vector3(rnd(-.6, .6), .5, 2.3)), 1, 'spark'); }
+    else nitro = Math.min(100, nitro + 6 * dt);
+    P.vx += (steerV * (9 + P.speed * 0.16) - P.vx) * Math.min(1, dt * 6);
+    pos.x += P.vx * dt; pos.z -= P.speed * dt;
+    // отбойник
+    if (Math.abs(pos.x) > ROAD_HALF - 1) {
+      const s = Math.sign(pos.x); pos.x = s * (ROAD_HALF - 1);
+      if (P.speed > 15) { P.hp -= dt * 14; P.speed *= 1 - dt * 0.8; if (Math.random() < .6) burst(new THREE.Vector3(pos.x + s, .6, pos.z), 2, 'spark'); shake = Math.max(shake, .15); }
+      P.vx = -s * 2;
+      if (P.hp <= 0) wreck(30);
+    }
+    // прыжок с трамплина
+    P.vy -= 24 * dt; pos.y = Math.max(0, pos.y + P.vy * dt);
+    if (pos.y === 0) { if (P.vy < -16) { P.hp -= (-P.vy - 16) * 2; shake = .5; crashSound(10); if (P.hp <= 0) wreck(25); } P.vy = 0; }
+    ramps.forEach(r => { if (pos.y < .3 && Math.abs(pos.x - r.position.x) < 2.6 && Math.abs(pos.z - r.position.z) < 3) { P.vy = 6 + P.speed * 0.17; pos.y = 0.6; score += 100; floatText('ПРЫЖОК +100'); } });
+    player.rotation.y = -steerV * 0.22; player.rotation.x = pos.y > 0 ? Math.max(-.35, Math.min(.35, -P.vy * 0.02)) : 0;
+    P.wheels.forEach(w => w.rotation.x -= P.speed * dt / 0.4);
+    // столкновения
+    traffic.forEach(c => {
+      const dx = c.position.x - pos.x, dz = c.position.z - pos.z;
+      if (Math.abs(dx) < 2.05 && Math.abs(dz) < 4.35 && pos.y < 1.2) {
+        const O = c.userData;
+        const impact = Math.max(4, (P.speed - O.speed) * (dz < 0 ? 1 : 0.4) + Math.abs(P.vx - O.vx) * 0.6);
+        // развести машины
+        if (Math.abs(dx) / 2.05 > Math.abs(dz) / 4.35) { const s = Math.sign(dx) || 1; c.position.x = pos.x + s * 2.1; } else { c.position.z = pos.z - 4.4 * (Math.sign(-dz) || 1); }
+        if (c.userData._cd > 0) return;
+        c.userData._cd = .35;
+        hitCar(c, impact, Math.sign(dx) || 1);
+      }
+    });
+    distance = startZ - pos.z;
+    score += Math.round(P.speed * dt * 0.5);
+  } else {
+    // после аварии корпус катится по инерции
+    P.speed = Math.max(0, P.speed - 30 * dt); pos.z -= P.speed * dt;
+    overT -= dt / Math.max(timeScale, .25);
+    if (overT <= 0) gameOver();
+  }
+  // трафик
+  traffic.forEach((c, i) => {
+    const O = c.userData; O._cd = Math.max(0, (O._cd || 0) - dt);
+    if (O.wrecked) { O.speed = Math.max(0, O.speed - 14 * dt); O.spin *= 1 - dt * 1.5; c.rotation.y += O.spin * dt; }
+    else { O.spin *= 1 - dt * 3; c.rotation.y += O.spin * dt; c.rotation.y *= 1 - dt * 2; O.vx *= 1 - dt * 2.5; if (Math.abs(c.position.x) > ROAD_HALF - 1) { c.position.x = Math.sign(c.position.x) * (ROAD_HALF - 1); O.vx *= -0.4; } }
+    c.position.x += O.vx * dt; c.position.z -= O.speed * dt;
+    O.wheels.forEach(w => { if (w.parent === c) w.rotation.x -= O.speed * dt / 0.4; });
+    if (c.position.z > pos.z + 40 || c.position.z < pos.z - 420) {
+      if (O.wrecked || O.parts.length < 13) { scene.remove(c); traffic[i] = makeCar(COLORS[Math.floor(Math.random() * COLORS.length)], false); spawnTraffic(traffic[i], pos.z - rnd(220, 380)); }
+      else spawnTraffic(c, pos.z - rnd(220, 380));
+    }
+  });
+  // плотность трафика растёт
+  if (state === 'play' && traffic.length < 12 + Math.min(10, Math.floor(distance / 1500))) newTrafficCar(pos.z - rnd(250, 380));
+  ramps.forEach(r => { if (r.position.z > pos.z + 20) placeRamp(r, pos.z - rnd(400, 700)); });
+  // окружение едет за игроком
+  road.position.z = pos.z - 200; roadTex.offset.y = -(pos.z) / 16;
+  grass.position.z = pos.z; rails.forEach(r => r.position.z = pos.z - 200);
+  posts.forEach(p => { if (p.position.z > pos.z + 20) p.position.z -= 320; });
+  trees.forEach(t => { if (t.position.z > pos.z + 30) { t.position.z -= rnd(320, 360); t.position.x = (Math.random() < .5 ? -1 : 1) * rnd(17, 60); } });
+  sun.position.set(pos.x - 30, 50, pos.z + 20); sun.target.position.set(pos.x, 0, pos.z - 10);
+  // HUD
+  $('score').textContent = score; $('dist').textContent = Math.round(distance) + ' м';
+  $('spd').textContent = Math.round(P.speed * 3.6);
+  $('hp').firstElementChild.style.width = Math.max(0, P.hp) + '%'; $('nt').firstElementChild.style.width = nitro + '%';
+  if (AC && engGain) { eng.frequency.value = 50 + P.speed * 2.2; engGain.gain.value = muted || state !== 'play' ? 0 : .05; }
+}
+
+function updateEffects(dt) {
+  for (let i = debris.length - 1; i >= 0; i--) {
+    const d = debris[i];
+    d.v.y -= 24 * dt; d.m.position.addScaledVector(d.v, dt);
+    d.m.rotation.x += d.w.x * dt; d.m.rotation.y += d.w.y * dt; d.m.rotation.z += d.w.z * dt;
+    if (d.m.position.y < d.h) {
+      d.m.position.y = d.h;
+      if (d.v.y < -2) { d.v.y *= -0.35; d.v.x *= .7; d.v.z *= .7; d.w.multiplyScalar(.6); } else { d.v.y = 0; d.v.x *= 1 - dt * 3; d.v.z *= 1 - dt * 3; d.w.multiplyScalar(1 - dt * 3); }
+    }
+    if (player && d.m.position.z > player.position.z + 60 && state === 'play') { scene.remove(d.m); debris.splice(i, 1); }
+  }
+  for (let i = fx.length - 1; i >= 0; i--) {
+    const f = fx[i]; f.life -= dt;
+    if (f.life <= 0) { scene.remove(f.m); f.m.material.dispose(); fx.splice(i, 1); continue; }
+    if (!f.smoke) f.v.y -= 20 * dt;
+    f.m.position.addScaledVector(f.v, dt);
+    const k = f.life / f.max; f.m.material.opacity = f.smoke ? .55 * k : k;
+    if (f.smoke) f.m.scale.setScalar(1 + (1 - k) * 2.5);
+  }
+}
+
+const camPos = new THREE.Vector3(0, 5, 10), look = new THREE.Vector3();
+function updateCamera(dt) {
+  if (!player) { const t = performance.now() / 4000; camera.position.set(Math.sin(t) * 14, 6, 10 + Math.cos(t) * 6); camera.lookAt(0, 1, -10); return; }
+  const p = player.position, s = player.userData.speed;
+  let want, at;
+  if (camFocus && state !== 'play') { want = camFocus.position.clone().add(new THREE.Vector3(7, 4, 9)); at = camFocus.position.clone(); }
+  else { const far = camera.aspect < 1 ? 5 : 0; want = new THREE.Vector3(p.x * .7, 3.4 + far * .35 + s * .02, p.z + 8.5 + far + s * .04); at = new THREE.Vector3(p.x, 1.2 + p.y * .5, p.z - 8); }
+  camPos.lerp(want, Math.min(1, dt * 5)); look.lerp(at, Math.min(1, dt * 8));
+  if (state === 'play') { camPos.z = want.z; look.z = at.z; }  // по ходу движения камера не отстаёт
+  camera.position.copy(camPos);
+  if (shake > 0) { camera.position.add(new THREE.Vector3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)).multiplyScalar(shake * .35)); shake = Math.max(0, shake - dt * 2); }
+  camera.lookAt(look);
+  const fov = 62 + Math.min(18, s * .2); if (Math.abs(camera.fov - fov) > .1) { camera.fov += (fov - camera.fov) * Math.min(1, dt * 3); camera.updateProjectionMatrix(); }
+}
+
+// фон меню: пара машин
+const demo = [makeCar(0xffcf33, false), makeCar(0x2f7de1, false)]; demo[0].position.set(-2, 0, -6); demo[1].position.set(3, 0, -14); demo[1].rotation.y = .4;
+function start() {
+  demo.forEach(d => scene.remove(d));
+  audioInit(); if (AC && AC.state === 'suspended') AC.resume();
+  reset(); state = 'play'; $('start').classList.add('hidden'); $('over').classList.add('hidden');
+}
+$('go').onclick = start; $('again').onclick = start;
+addEventListener('keydown', e => { if ((e.code === 'Enter' || e.code === 'Space') && (state === 'menu' || state === 'over')) start(); });
+requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
