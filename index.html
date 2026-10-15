@@ -46,7 +46,7 @@ canvas{display:block}
 <div id="touch"><div class="grp"><button id="bL">◀</button><button id="bR">▶</button></div><div class="grp"><button id="bB">■</button><button id="bN">🔥</button></div></div>
 <div class="screen" id="start">
   <h1>CRASH ДЕРБИ</h1>
-  <p>Гони по трассе, тарань машины и разноси их на запчасти. Чем жёстче авария — тем больше очков. Береги корпус: от сильного удара твоя машина развалится, а манекен-водитель вылетит через лобовое.</p>
+  <p>Гони по трассе, тарань машины и сбивай манекенов-пешеходов — они разлетаются на части. Чем жёстче авария — тем больше очков. Береги корпус: от сильного удара твоя машина развалится, а манекен-водитель вылетит через лобовое.</p>
   <button class="btn" id="go">СТАРТ</button>
   <div class="keys">← → руль · ↓ тормоз · Пробел / Shift — нитро · на телефоне — кнопки внизу</div>
 </div>
@@ -151,6 +151,35 @@ function makeCar(color, isPlayer) {
   return g;
 }
 
+
+// ---------- манекены-пешеходы ----------
+const PED_COLORS = [0xffc928, 0xff7a2a, 0x4aa3ff, 0x7bd35a, 0xe85b8a];
+let peds = [];
+function makePed() {
+  const g = new THREE.Group(), parts = [];
+  const body = new THREE.MeshStandardMaterial({color: PED_COLORS[Math.floor(Math.random() * PED_COLORS.length)], roughness: .5});
+  const add = (geo, m, x, y, z) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.castShadow = true; g.add(o); parts.push(o); return o; };
+  const legL = add(G.leg, M.dummyDark, -0.13, 0.36, 0), legR = add(G.leg, M.dummyDark, 0.13, 0.36, 0);
+  const torso = add(G.torso, body, 0, 0.98, 0);
+  const head = add(G.head, M.dummy, 0, 1.5, 0);
+  const eye = new THREE.Mesh(new THREE.SphereGeometry(.045, 8, 6), M.dummyDark); eye.position.set(-.08, .04, .18); head.add(eye); const e2 = eye.clone(); e2.position.x = .08; head.add(e2);
+  const armL = add(G.limb, body, -0.34, 1.0, 0), armR = add(G.limb, body, 0.34, 1.0, 0);
+  g.userData = {parts, legL, legR, armL, armR, vx: 0, phase: Math.random() * 6, down: false};
+  scene.add(g); return g;
+}
+function placePed(p, z) {
+  const side = Math.random() < .5 ? -1 : 1;
+  p.position.set(side * rnd(4, 11), 0, z); p.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+  p.userData.vx = -side * rnd(1.2, 2.4); p.userData.down = false;
+}
+function hitPed(p) {
+  const P = player.userData, v = velOf(player);
+  p.userData.down = true;
+  p.userData.parts.splice(0).forEach((m, i) => detach(m, v.clone().multiplyScalar(rnd(.55, .95)).add(new THREE.Vector3(rnd(-4, 4), rnd(5, 11) + P.speed * .08, rnd(-3, 3))), 2.5));
+  burst(p.position.clone().setY(1), 6, 'spark');
+  P.hp -= 3; P.speed *= .97; score += 200; floatText('СТРАЙК! +200'); shake = Math.max(shake, .35); crashSound(12);
+}
+
 // ---------- обломки и частицы ----------
 const debris = [], fx = [];
 const tmp = new THREE.Vector3();
@@ -230,6 +259,8 @@ function reset() {
   Object.assign(player.userData, {speed: 18, vy: 0, hp: 100});
   player.position.set(3, 0, 0); startZ = 0;
   for (let i = 0; i < 12; i++) newTrafficCar(-60 - i * 28);
+  peds.forEach(p => scene.remove(p)); peds = [];
+  for (let i = 0; i < 10; i++) { const p = makePed(); placePed(p, -80 - i * 45); peds.push(p); }
   ramps.forEach(r => scene.remove(r)); ramps = [];
   for (let i = 0; i < 3; i++) { const r = new THREE.Mesh(rampGeo, rampMat); r.castShadow = r.receiveShadow = true; scene.add(r); placeRamp(r, -220 - i * 260); ramps.push(r); }
   score = 0; distance = 0; nitro = 100; timeScale = 1; slowT = 0; shake = 0; steerV = 0; camFocus = null;
@@ -347,6 +378,18 @@ function update(dt, rdt) {
     overT -= dt / Math.max(timeScale, .25);
     if (overT <= 0) gameOver();
   }
+  // пешеходы
+  peds.forEach((p, i) => {
+    const U = p.userData;
+    if (!U.down) {
+      p.position.x += U.vx * dt; U.phase += dt * 7;
+      const sw = Math.sin(U.phase) * .6;
+      U.legL.rotation.x = sw; U.legR.rotation.x = -sw; U.armL.rotation.x = -sw * .8; U.armR.rotation.x = sw * .8;
+      if (Math.abs(p.position.x) > 13) U.vx *= -1, p.rotation.y += Math.PI;
+      if (state === 'play' && Math.abs(p.position.x - pos.x) < 1.25 && Math.abs(p.position.z - pos.z) < 2.6 && pos.y < 1.6) hitPed(p);
+    }
+    if (p.position.z > pos.z + 30) { scene.remove(p); peds[i] = makePed(); placePed(peds[i], pos.z - rnd(200, 420)); }
+  });
   // трафик
   traffic.forEach((c, i) => {
     const O = c.userData; O._cd = Math.max(0, (O._cd || 0) - dt);
